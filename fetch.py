@@ -21,7 +21,7 @@ COUNTRY = os.getenv("SCRAPERAPI_COUNTRY", "us")
 
 USER_AGENT = "BrandTracker/1.0 (research)"
 MIN_DELAY_SEC = 1.0
-TIMEOUT = 25          # fail fast instead of hanging
+TIMEOUT = 70          # fail fast instead of hanging
 TRIES = 1            # one attempt; we'd rather move on and see results
 RESPECT_ROBOTS = True  # only applies to direct (no-key) mode
 

@@ -33,6 +33,7 @@ jobs:
       - name: Scrape + compute metrics
         env:
           SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
+          SCRAPERAPI_RENDER: "false"
         run: python run_weekly.py
 
       - name: Build dashboard

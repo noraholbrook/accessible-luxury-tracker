@@ -85,5 +85,5 @@ BRANDS = {
 }
 
 CATEGORY = "handbags"      # the tracked universe
-MAX_PAGES = 8              # pagination safety cap per category
+MAX_PAGES = 1              # pagination safety cap per category
 PAGE_SIZE = 48            # SFRA sz param

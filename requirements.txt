@@ -1,0 +1,9 @@
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pandas>=2.0
+numpy>=1.26
+# optional outputs:
+# gspread>=6.0            # push metrics to Google Sheets
+# slack_sdk>=3.0          # post the weekly summary to Slack
+# playwright>=1.44        # only if a brand is fully JS-rendered

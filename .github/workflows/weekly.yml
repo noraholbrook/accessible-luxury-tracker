@@ -1,0 +1,54 @@
+name: weekly-brand-tracker
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"        # every Monday 13:00 UTC (~9am ET)
+  workflow_dispatch: {}           # run on demand from the Actions tab
+
+permissions:
+  contents: write                 # commit the snapshot DB back
+  pages: write                    # publish the dashboard
+  id-token: write                 # required by deploy-pages
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  track-and-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Scrape + compute this week
+        run: python run_weekly.py
+
+      - name: Commit snapshot back to repo (state persistence)
+        run: |
+          git config user.name  "brand-tracker-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/tracker.db reports/ || true
+          git commit -m "Weekly snapshot $(date -u +%F)" || echo "nothing to commit"
+          git push || echo "push skipped"
+
+      - name: Build dashboard
+        run: python build_site.py
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weekly-reports
+          path: reports/

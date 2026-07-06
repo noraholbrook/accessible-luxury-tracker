@@ -1,10 +1,11 @@
 """HTTP layer. Routes through ScraperAPI when SCRAPERAPI_KEY is set.
 
 ScraperAPI fetches the target on its own infrastructure (proxies + a real
-browser via render=true), which is what gets past JS/bot challenges. We never
-hardcode the key — it's read from the environment (a GitHub Actions secret).
+browser via render=true) to get past JS/bot challenges. The key is read from
+the environment (a GitHub Actions secret) and never hardcoded.
 
-If no key is set, it falls back to a direct, robots-respecting fetch.
+This version fails fast and logs each attempt, so the Actions log shows
+progress instead of going silent on a slow page.
 """
 import os
 import time
@@ -15,13 +16,14 @@ import requests
 
 API_KEY = os.getenv("SCRAPERAPI_KEY", "").strip()
 API_ENDPOINT = "https://api.scraperapi.com/"
-RENDER = os.getenv("SCRAPERAPI_RENDER", "true")   # "true" costs more credits but beats JS challenges
+RENDER = os.getenv("SCRAPERAPI_RENDER", "true")
 COUNTRY = os.getenv("SCRAPERAPI_COUNTRY", "us")
 
 USER_AGENT = "BrandTracker/1.0 (research)"
 MIN_DELAY_SEC = 1.0
-TIMEOUT = 70
-RESPECT_ROBOTS = True   # only applies to direct (no-key) mode
+TIMEOUT = 25          # fail fast instead of hanging
+TRIES = 1            # one attempt; we'd rather move on and see results
+RESPECT_ROBOTS = True  # only applies to direct (no-key) mode
 
 _last = {}
 _robots = {}
@@ -57,40 +59,39 @@ def _throttle(host):
 
 
 def _wrap(target):
-    """Build the ScraperAPI request URL around a target URL."""
     payload = {"api_key": API_KEY, "url": target, "render": RENDER}
     if COUNTRY:
         payload["country_code"] = COUNTRY
     return API_ENDPOINT + "?" + urlencode(payload)
 
 
-def get(url, params=None, tries=3, expect_json=False):
-    # fold any query params into the target URL first
+def get(url, params=None, tries=TRIES, expect_json=False):
     if params:
         url = url + ("&" if "?" in url else "?") + urlencode(params)
 
     if using_api():
-        request_url = _wrap(url)          # ScraperAPI handles proxies/rendering/challenges
+        request_url = _wrap(url)
+        print(f"    -> fetch (via ScraperAPI): {url}", flush=True)
     else:
         if not _robots_ok(url):
-            print(f"  [robots] disallowed, skipping: {url}")
+            print(f"    [robots] disallowed, skipping: {url}", flush=True)
             return None
         request_url = url
+        print(f"    -> fetch: {url}", flush=True)
 
     host = urlparse(url).netloc
     for attempt in range(1, tries + 1):
         _throttle("scraperapi" if using_api() else host)
+        t0 = time.time()
         try:
             r = _session.get(request_url, timeout=TIMEOUT)
+            dt = time.time() - t0
             if r.status_code == 200:
+                print(f"       ok {r.status_code} in {dt:.0f}s ({len(r.text)} bytes)", flush=True)
                 return r.json() if expect_json else r.text
-            if r.status_code in (403, 429, 500):
-                print(f"  [{r.status_code}] {url} (attempt {attempt})")
-                time.sleep(4 * attempt)
-                continue
-            print(f"  [{r.status_code}] {url}")
+            print(f"       {r.status_code} in {dt:.0f}s", flush=True)
             return None
         except requests.RequestException as e:
-            print(f"  [error] {e} (attempt {attempt})")
-            time.sleep(3 * attempt)
+            print(f"       error after {time.time()-t0:.0f}s: {type(e).__name__}", flush=True)
+            return None
     return None

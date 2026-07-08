@@ -1,48 +1,75 @@
 """Extractors that turn a page into normalized variant records.
 
-Three strategies, in order of reliability:
-  1. Shopify  -> /products.json (clean, structured)            [Marc Jacobs may be here]
-  2. JSON-LD  -> <script type="application/ld+json"> Product   [works on many PDPs]
-  3. SFCC/SFRA grid tiles -> configurable CSS selectors        [Coach/KS/MK/TB]
-
-Each returns a list of dicts with the observation fields (minus snapshot_date,
-which run_weekly stamps on). Availability is often absent on grid pages; see the
-README for how to get reliable in_stock (PDP JSON-LD offers.availability).
+Price handling is deliberately forgiving: for each product tile we read every
+dollar amount present. Two distinct amounts => on sale (higher = original,
+lower = current); one amount => full price. This avoids brittle per-site price
+selectors. A one-time diagnostic prints the first tile's HTML so selectors can
+be confirmed against the real markup.
 """
 import json
 import re
 from bs4 import BeautifulSoup
 
-_PCT = re.compile(r"(\d{1,2})\s*%\s*off", re.I)
-_PROMO_HINTS = re.compile(
-    r"(extra|take|up to|save)\s+\d+%|(\d+%\s*off)|sitewide|clearance|"
-    r"friends?\s*&?\s*family|flash sale|code\s+[A-Z0-9]{3,}", re.I)
+PRICE_RE = re.compile(r"\$\s?([0-9][0-9,]*(?:\.[0-9]{2})?)")
+TILE_SEL = "div.product-tile, li.product-tile, .product-grid .product, [data-pid], article.product, .product-tile-wrapper"
+_diag_done = False
 
 
-# ---------- 1. Shopify ----------
-def parse_shopify(products_json, brand, channel, category):
+def _prices_in(text):
     out = []
-    for p in products_json.get("products", []):
-        pid = str(p.get("id"))
-        title = p.get("title")
-        tags = " ".join(p.get("tags", [])) if isinstance(p.get("tags"), list) else str(p.get("tags", ""))
-        is_new = 1 if re.search(r"\bnew\b", tags, re.I) else 0
-        handle = p.get("handle", "")
-        for v in p.get("variants", []):
-            price = _f(v.get("price"))
-            compare = _f(v.get("compare_at_price")) or price
-            out.append(dict(
-                brand=brand, channel=channel, category=category,
-                product_id=pid, variant_id=str(v.get("id")),
-                title=title, color=v.get("option1"),
-                url=f"/products/{handle}",
-                list_price=compare, sale_price=price,
-                in_stock=1 if v.get("available") else 0,
-                is_new_flag=is_new))
+    for m in PRICE_RE.findall(text or ""):
+        try:
+            out.append(float(m.replace(",", "")))
+        except ValueError:
+            pass
     return out
 
 
-# ---------- 2. JSON-LD ----------
+def parse_sfcc_grid(html, brand, channel, category, sel):
+    global _diag_done
+    soup = BeautifulSoup(html, "lxml")
+    tiles = soup.select(TILE_SEL)
+
+    if not _diag_done:
+        _diag_done = True
+        n_ld = len(soup.find_all("script", type="application/ld+json"))
+        print(f"    [diag] {brand}: {len(tiles)} tiles found; {n_ld} JSON-LD blocks", flush=True)
+        if tiles:
+            snippet = " ".join(str(tiles[0]).split())[:800]
+            print(f"    [diag] first tile HTML: {snippet}", flush=True)
+
+    out, seen = [], set()
+    for tile in tiles:
+        pid = tile.get(sel.get("pid_attr", "data-pid"))
+        link = tile.select_one(sel.get("link", "a[href]"))
+        href = link.get("href") if link else None
+        if not pid:
+            pid = (href or "").rstrip("/").split("/")[-1].split("?")[0] or None
+        if not pid:
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+
+        # price: try selectors, then fall back to any $ amounts in the tile
+        sale = _price(tile, sel.get("sale"))
+        lst = _price(tile, sel.get("list"))
+        if sale is None or lst is None:
+            ps = sorted(set(_prices_in(tile.get_text(" ", strip=True))))
+            if ps:
+                sale = sale if sale is not None else ps[0]
+                lst = lst if lst is not None else ps[-1]
+        title = _txt(tile, sel.get("title"))
+        out.append(dict(
+            brand=brand, channel=channel, category=category,
+            product_id=str(pid), variant_id="std",
+            title=title, color=None, url=href,
+            list_price=lst, sale_price=sale,
+            in_stock=1,  # grids rarely mark OOS; assume in stock
+            is_new_flag=1 if sel.get("new") and tile.select_one(sel["new"]) else 0))
+    return out
+
+
 def parse_jsonld(html, brand, channel, category):
     soup = BeautifulSoup(html, "lxml")
     out = []
@@ -57,16 +84,39 @@ def parse_jsonld(html, brand, channel, category):
             price = _f(offers.get("price"))
             list_price = _f(offers.get("highPrice")) or price
             avail = str(offers.get("availability", "")).lower()
+            if price is None:
+                continue
             out.append(dict(
                 brand=brand, channel=channel, category=category,
                 product_id=str(node.get("productID") or node.get("sku") or node.get("name")),
-                variant_id=str(node.get("sku") or node.get("color") or "default"),
-                title=node.get("name"), color=node.get("color"),
-                url=node.get("url"),
+                variant_id=str(node.get("sku") or "std"),
+                title=node.get("name"), color=node.get("color"), url=node.get("url"),
                 list_price=list_price, sale_price=price,
-                in_stock=0 if "outofstock" in avail else (1 if "instock" in avail else None),
-                is_new_flag=None))
+                in_stock=0 if "outofstock" in avail else 1, is_new_flag=0))
     return out
+
+
+def parse_shopify(products_json, brand, channel, category):
+    out = []
+    for p in products_json.get("products", []):
+        for v in p.get("variants", []):
+            price = _f(v.get("price"))
+            out.append(dict(
+                brand=brand, channel=channel, category=category,
+                product_id=str(p.get("id")), variant_id=str(v.get("id")),
+                title=p.get("title"), color=v.get("option1"),
+                url=f"/products/{p.get('handle','')}",
+                list_price=_f(v.get("compare_at_price")) or price, sale_price=price,
+                in_stock=1 if v.get("available") else 0, is_new_flag=0))
+    return out
+
+
+def detect_promo(html):
+    text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)[:6000]
+    pcts = [int(x) for x in re.findall(r"(\d{1,2})\s*%\s*off", text, re.I)]
+    return dict(promo_active=1 if pcts else 0,
+                promo_text=(f"up to {max(pcts)}% off" if pcts else ""),
+                promo_max_pct=float(max(pcts)) if pcts else None)
 
 
 def _iter_products(data):
@@ -80,67 +130,22 @@ def _iter_products(data):
             yield from _iter_products(v)
 
 
-# ---------- 3. SFCC / SFRA grid tiles ----------
-def parse_sfcc_grid(html, brand, channel, category, sel):
-    """sel: dict of CSS selectors for this brand's theme (see config.SELECTORS).
-    Verify with discover.py before trusting output."""
-    soup = BeautifulSoup(html, "lxml")
-    out = []
-    for tile in soup.select(sel["tile"]):
-        pid = tile.get(sel.get("pid_attr", "data-pid")) or _txt(tile, sel.get("pid"))
-        if not pid:
-            continue
-        sale = _price(tile, sel.get("sale"))
-        lst = _price(tile, sel.get("list")) or sale
-        out.append(dict(
-            brand=brand, channel=channel, category=category,
-            product_id=str(pid),
-            variant_id=_txt(tile, sel.get("color")) or "default",
-            title=_txt(tile, sel.get("title")),
-            color=_txt(tile, sel.get("color")),
-            url=_attr(tile, sel.get("link"), "href"),
-            list_price=lst, sale_price=sale,
-            in_stock=None,  # grids rarely expose stock; enrich via PDP if needed
-            is_new_flag=1 if sel.get("new") and tile.select_one(sel["new"]) else 0))
-    return out
-
-
-# ---------- promo detector ----------
-def detect_promo(html):
-    text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)[:6000]
-    hits = _PROMO_HINTS.findall(text)
-    pcts = [int(x) for x in _PCT.findall(text)]
-    active = bool(hits) or bool(pcts)
-    snippet = ""
-    m = _PROMO_HINTS.search(text)
-    if m:
-        i = m.start()
-        snippet = text[max(0, i - 30): i + 70].strip()
-    return dict(promo_active=1 if active else 0,
-                promo_text=snippet[:200],
-                promo_max_pct=float(max(pcts)) if pcts else None)
-
-
-# ---------- helpers ----------
 def _f(x):
     try:
         return float(str(x).replace("$", "").replace(",", "").strip())
     except (TypeError, ValueError):
         return None
 
-def _txt(node, sel):
-    if not sel: return None
-    el = node.select_one(sel)
+def _txt(node, css):
+    if not css:
+        return None
+    el = node.select_one(css)
     return el.get_text(strip=True) if el else None
 
-def _attr(node, sel, attr):
-    if not sel: return None
-    el = node.select_one(sel)
-    return el.get(attr) if el else None
-
-def _price(node, sel):
-    if not sel: return None
-    el = node.select_one(sel)
-    if not el: return None
-    # prefer a content= attribute (SFRA puts machine price there), else text
-    return _f(el.get("content")) or _f(el.get_text())
+def _price(node, css):
+    if not css:
+        return None
+    el = node.select_one(css)
+    if not el:
+        return None
+    return _f(el.get("content")) or (_prices_in(el.get_text(" ", strip=True)) or [None])[0]

@@ -1,89 +1,46 @@
-"""Per-brand configuration.
+"""Per-brand configuration — 4 brands, full-price handbags only.
+
+EDIT THE URLS BELOW: paste the page you land on when you click "Handbags"
+on each brand's own site. Three are pre-filled with URLs that already returned
+a real page in testing; Michael Kors needs the correct one.
 
 Coach, Kate Spade, Michael Kors and Tory Burch run on Salesforce Commerce
-Cloud (Demandware/SFRA); Marc Jacobs is auto-detected (Shopify -> else SFCC).
-
-IMPORTANT: the category URLs and CSS selectors below are STARTING POINTS.
-Site markup changes and differs per brand theme. Run `python discover.py <url>`
-on each category page to confirm the method and selectors before relying on
-the numbers. Anything you haven't verified is marked TODO.
-
-Keep the universe consistent (same category, same country site) so week-over-week
-comparisons are apples-to-apples. Handbags is the cleanest universe for this pitch.
+Cloud, so they share a similar page structure.
 """
+from urllib.parse import urlparse
 
-# Default SFRA grid selectors — verify per brand with discover.py.
+# ---- EDIT THESE ----
+CATEGORY_URLS = {
+    "kate_spade":   "https://www.katespade.com/shop/handbags",
+    "coach":        "https://www.coach.com/shop/women-handbags",
+    "michael_kors": "https://www.michaelkors.com/women/handbags/?start=0&sz=24",
+    "tory_burch":   "https://www.toryburch.com/en-us/handbags/",
+}
+
+# CSS selectors for the product grid (best-effort; the parser also falls back
+# to reading dollar amounts directly, so these don't have to be perfect).
 SFRA_DEFAULT = {
-    "tile": "div.product-tile, .product-grid .product",
+    "tile": "div.product-tile, li.product-tile, .product-grid .product, [data-pid]",
     "pid_attr": "data-pid",
-    "title": ".pdp-link a, .product-tile-title, .link",
-    "link": ".pdp-link a, a.link",
-    "sale": ".price .sales .value, .price .sales, span.sales .value",
-    "list": ".price .strike-through .value, .price del .value, .strike-through",
+    "title": ".pdp-link a, .product-tile-title, .link, a[href]",
+    "link": ".pdp-link a, a.link, a[href]",
+    "sale": ".price .sales .value, .price .sales, span.sales .value, .sales",
+    "list": ".price .strike-through .value, .price del .value, .strike-through, del",
     "color": ".swatch-circle[title], .color-value",
     "new": ".product-badge, .badge-new",
 }
 
-BRANDS = {
-    "kate_spade": {
+BRANDS = {}
+for _brand, _url in CATEGORY_URLS.items():
+    _base = f"{urlparse(_url).scheme}://{urlparse(_url).netloc}" if _url.startswith("http") else ""
+    BRANDS[_brand] = {
         "channels": {
-            "full":   {"method": "sfcc", "base": "https://www.katespade.com",
-                       # TODO verify path + pagination param (SFRA: ?start=0&sz=48)
-                       "category_url": "https://www.katespade.com/shop/handbags",
-                       "selectors": SFRA_DEFAULT},
-            "outlet": {"method": "sfcc", "base": "https://www.surprise.katespade.com",
-                       "category_url": "https://www.surprise.katespade.com/shop/handbags",
-                       "selectors": SFRA_DEFAULT},
+            "full": {"method": "sfcc", "base": _base,
+                     "category_url": _url, "selectors": SFRA_DEFAULT},
         },
-        "promo_url": "https://www.surprise.katespade.com",
-    },
-    "coach": {
-        "channels": {
-            "full":   {"method": "sfcc", "base": "https://www.coach.com",
-                       "category_url": "https://www.coach.com/shop/women-handbags",
-                       "selectors": SFRA_DEFAULT},
-            "outlet": {"method": "sfcc", "base": "https://www.coachoutlet.com",
-                       "category_url": "https://www.coachoutlet.com/shop/women-bags",
-                       "selectors": SFRA_DEFAULT},
-        },
-        "promo_url": "https://www.coachoutlet.com",
-    },
-    "michael_kors": {
-        "channels": {
-            "full":   {"method": "sfcc", "base": "https://www.michaelkors.com",
-                       "category_url": "https://www.michaelkors.com/women/handbags/_/N-28ei",
-                       "selectors": SFRA_DEFAULT},
-            # MK online outlet lives under a /outlet path; verify.
-            "outlet": {"method": "sfcc", "base": "https://www.michaelkors.com",
-                       "category_url": "https://www.michaelkors.com/outlet/handbags/_/N-...",
-                       "selectors": SFRA_DEFAULT},
-        },
-        "promo_url": "https://www.michaelkors.com/outlet",
-    },
-    "tory_burch": {
-        "channels": {
-            "full":   {"method": "sfcc", "base": "https://www.toryburch.com",
-                       "category_url": "https://www.toryburch.com/en-us/handbags/",
-                       "selectors": SFRA_DEFAULT},
-            # TB's online outlet is limited; sale section is the practical proxy.
-            "outlet": {"method": "sfcc", "base": "https://www.toryburch.com",
-                       "category_url": "https://www.toryburch.com/en-us/sale/handbags/",
-                       "selectors": SFRA_DEFAULT},
-        },
-        "promo_url": "https://www.toryburch.com/en-us/sale/",
-    },
-    "marc_jacobs": {
-        "channels": {
-            # auto: tries Shopify /products.json, else SFCC/JSON-LD
-            "full":   {"method": "auto", "base": "https://www.marcjacobs.com",
-                       "category_url": "https://www.marcjacobs.com/handbags",
-                       "shopify_collection": "handbags",
-                       "selectors": SFRA_DEFAULT},
-        },
-        "promo_url": "https://www.marcjacobs.com/sale",
-    },
-}
+        "promo_url": None,   # outlet/promo tracking off for now
+    }
 
-CATEGORY = "handbags"      # the tracked universe
-MAX_PAGES = 1              # pagination safety cap per category
-PAGE_SIZE = 48            # SFRA sz param
+CATEGORY = "handbags"
+MAX_PAGES = 1        # one page per brand while we tune; raise later
+PAGE_SIZE = 48

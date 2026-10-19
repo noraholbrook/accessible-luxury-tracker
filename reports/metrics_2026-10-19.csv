@@ -1,0 +1,5 @@
+brand,channel,as_of,n_variants,n_styles,pct_skus_on_sale,avg_discount_depth_all,avg_discount_depth_onsale,new_arrivals,new_arrivals_full_price_pct,sellouts_count,sellout_rate_pct,time_to_markdown_median_days,n_marked_down,n_still_full_price,outlet_share_pct
+coach,full,2026-10-19,16,16,0.0,0.0,0.0,,,,,,0,16,0.0
+kate_spade,full,2026-10-19,16,16,18.8,4.8,25.5,,,,,,0,13,0.0
+michael_kors,full,2026-10-19,96,96,16.7,8.5,51.3,,,,,,0,80,0.0
+tory_burch,full,2026-10-19,29,29,0.0,0.0,0.0,,,,,,0,29,0.0
